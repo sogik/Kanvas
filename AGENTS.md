@@ -176,6 +176,17 @@ takes priority over any default workflow (ODD, plans, feature documents).
    changed, then `finish <ID>` (cyan).
 4. Never mark green. The human checks the diff and does that.
 
+### Handling Feedback on Cyan Cards (Refinement)
+If the card is in Cyan awaiting human review, and the human requests changes, fixes, or adjustments regarding that specific card:
+1. DO NOT propose a new card (no purple cards).
+2. Reopen the current task directly:
+   - Run start <TASK-ID> to move it back to Orzange.
+3. Update the description/notes of the SAME card with the human's feedback:
+   python canvas-tool.py "Project.canvas" edit <TASK-ID> "Added feedback: <adjustments requested>"
+4. Delegate the fixes to gentle-ai-worker using the same card context.
+5. Once fixed and verified, run finish <TASK-ID> again to return it to Cyan.
+6. ONLY propose a new card if the human asks for a completely new feature or requirement outside the original card's goal.
+
 ### Writing cards
 Every proposed card must contain:
 - Goal: one sentence.
