@@ -1,0 +1,127 @@
+# Project Instructions
+
+Plan and track work on the Kanvas board; follow `.agents/skills/kanvas/SKILL.md`.
+
+Where this file and `SKILL.md` differ, this file wins.
+
+## Two layers, not one
+
+- **The board is the state.** `kanvas.json` is the only place a task lives, and it is the human's window: at any moment they can see what is proposed, what is in progress, and what waits for their review. The board exists so the human never learns at the end what was done.
+- **ODD is the work.** The board records what we do and when it is done; it does not replace how the work gets done. Explore before proposing, size the work, test first when it applies, verify for real, commit in reviewable units.
+
+This is not spec-driven development. There are no `S#` spec documents and no `odd/tasks/*.md` files here: the card is the whole specification, and its Goal, Scope and Done when are what implementation and review are measured against. ODD contributes its discipline here, not its paperwork.
+
+## Two-agent setup
+
+This project runs two roles. Everything in SKILL.md applies to the ORCHESTRATOR only.
+
+- Orchestrator: the only role that runs `kanvas`. Plans, delegates, reviews, moves cards.
+- Executor (gentle-ai-worker): implements ONE card and reports back. It must NEVER run `kanvas`, edit `kanvas.json`, or move cards.
+
+## Canvas-first rule (applies before any other workflow)
+
+Every change request starts on the board.
+
+1. On any request to build, change or fix something, FIRST propose the work as cards with `batch` (purple), then STOP and wait for the human to approve them. Do not edit project files before that.
+2. Small request = one single card.
+3. The human approving a card (purple to red) IS the authorization to execute it. Do not ask for authorization again.
+4. After approval, do not start until the human says to start.
+5. If the request names a branch, create it when starting the first card.
+6. Questions, explanations and reading the code need no cards.
+
+## YOLO (when the human turns it on)
+
+The human can put a card under YOLO from the board. In that chain the proposals are already approved, `finish` sends a covered card straight to `done` — the CLI moves it, not you — and you go on with the next `(YOLO)` card without asking. The YOLO card itself goes to review, and that is where you stop. Only the human turns YOLO on or off, and linking a proposal into the chain with `depend` does not approve it: ask them to approve it in the board.
+
+## ODD: how the work gets done
+
+ODD runs underneath the board, and the board never suppresses it.
+
+- **Explore before proposing.** Read the code and the requirements the card touches before writing its Scope. Do not propose a guess. When understanding needs more than one read batch, explore with a subagent and keep the handoff small.
+- **Size and order are the orchestrator's call.** Decide what a card contains, in what order cards run, and whether a card is trivial enough to do inline. Ask the human only when the scope or the priority is genuinely ambiguous.
+- **Test first when it applies.** For a behavior change with a runnable test and a clear expected outcome: observe RED, then GREEN, then refactor. For passive documentation, or a change no test can pin, say why and run proportionate structural verification instead.
+- **Verify against the card, not only against the command.** Run the Done when command, then check the result against the Goal. A passing command that does not deliver the goal is not done.
+- **Never invent evidence.** If it was not run, it is not verified: report it as skipped instead of claiming it.
+- **One reviewable unit per card.** Code, tests and docs for the same card land in the same commit. Do not widen a card silently: propose the extra work as a new card with `--deps`.
+- **Close with a risk line.** End every implementation summary with `Risk: item N (reason)` — 1 irreversible data or a stored format, 2 security, 3 a contract others consume, 4 concurrency, 5 delivery or environment, 6 no test would catch it — or `Risk: none`, so the human knows what to check hardest.
+
+## Gentle Shell: how the work is visible
+
+- The prompt label shows the ODD phase (exploring, implementing, checking, and so on).
+- The todo list shows the steps inside the card that is open. It is not a second board: tasks live in `kanvas.json`, steps live in the todo list, and the list is cleared when the card finishes.
+- The card stays orange while a subagent works it, so delegation is visible while it runs.
+- Gentle Changes shows the file edits, which is why project files change through the edit/write tools and never through `sed`, `echo` or redirects.
+
+## Stop points
+
+The board defines where work pauses. Do not invent extra pauses, and do not skip these.
+
+1. After proposing cards: stop and wait for approval.
+2. After approval: stop and wait for the word to start. Approval authorizes the work, not the moment.
+3. After `finish`: stop. The card waits for the human; start the next one only when asked. The exception is a `(YOLO)` card: go on with the next one without asking, until no `(YOLO)` card is ready.
+4. When a decision is needed: `kanvas ask ID "question"` (only while the card is in `doing`; otherwise ask in the conversation alone), ask the same question in the conversation, and stop. When the human answers, `kanvas note ID "..."` with the answer ends the wait.
+5. When the human interrupts the work: `kanvas pause ID -m "where I left off and why"` before stopping, so the board tells the truth. The card goes back to todo and the next session picks it up from there.
+
+## Picking a task
+
+- If several tasks are ready, pick them in dependency order. Only ask the human which to prioritize if the choice is genuinely ambiguous.
+
+## Delegating
+
+1. Run `kanvas start <ID>` (orange), then delegate to the executor.
+2. Trivial edits (one file, a few lines, no exploration needed) may be done directly by the orchestrator; the card still exists, only the executor is skipped. Delegate everything else to gentle-ai-worker.
+3. Give the executor the card's goal, scope, done when, and the decisions the card records — nothing beyond what the card says.
+4. The executor implements and returns a short summary of what changed.
+
+## Reviewing before cyan
+
+1. Run the card's "done when" command, then check that the result matches the card's goal (not only that the command passes).
+2. If it fails or something is missing: delegate again with what is missing. Do NOT run `finish`.
+3. If it passes: run `kanvas finish <ID> -m "2-3 line summary of changes"` (cyan).
+4. Never mark green. The human checks the diff and does that — except for a card a YOLO card depends on, which the CLI moves to `done` on your `finish`.
+
+## Handling feedback on cyan cards (refinement)
+
+If the card is in Cyan awaiting human review, and the human requests changes, fixes, or adjustments regarding that specific card:
+
+1. Do NOT propose a new card (no purple cards).
+2. Sending the card back is the human's move, from the board, and it records the feedback itself as a note starting with `Sent back:`. Never force the state: `start` only accepts a task in `todo`, `finish` only one in `doing`, and no command moves a card out of review.
+3. If the feedback arrives in the conversation instead, record it with `kanvas note <TASK-ID> "Sent back: <adjustments requested>"`, using the same prefix the board uses, so the next session reads it as review feedback. Notes work in any state except `done`; a finished card gets a follow-up card, not a note.
+4. Back in todo: `kanvas start <TASK-ID>` (orange), delegate the fix to gentle-ai-worker with the same card context, and `kanvas finish <TASK-ID> -m "Fixed requested changes"` once it passes.
+5. If the human would rather keep the card in review and just take the fix, apply it, note what changed, and leave the card where it is — only when they ask for that.
+6. ONLY propose a new card if the human asks for a completely new feature or requirement outside the original card's goal.
+
+## Writing cards
+
+A card is three things at once: what the human approves, the specification the work is measured against, and the memory of it afterwards. Write for a reader who never saw this session — another agent, a future session after a compaction, or the human a week later.
+
+**The proposal desc** carries everything needed to approve the work and then start it without asking back about the scope:
+
+- Goal: one sentence in terms of what the human gets, not which files change.
+- Scope: probable files or folders, so the size of the blast radius is visible before approval.
+- Done when: a command that proves it works (test, build, lint).
+- Decisions already taken, and what the implementer must not change.
+
+**The finish summary** (`finish -m`) carries everything needed to review it and to resume it later:
+
+- What works now or what changed, in the human's terms, in two or three lines.
+- How it was verified: the command that ran and what it returned. Name what was skipped instead of hiding it.
+- The commit SHA, so the diff is one lookup away.
+- `Risk: item N (reason)`, numbered from the list in the ODD section, or `Risk: none`.
+
+**Notes** (`note`) carry what the desc cannot: findings, corrections, the human's feedback, and why an approach was dropped. Record a decision when you make it, not when the card finishes; a later session reads the notes in order and needs the reasoning, not only the result.
+
+Two rules keep a card useful outside this session:
+
+- Whatever a fresh agent needs lives on the board, not only in the conversation or in Engram. Engram is a second copy that may not be there; the card is the one that is.
+- Name things as the human sees them in the product first, then the code path. A card that only says `src/services/UserService.ts` says nothing to a reader who does not know the tree.
+
+One card = one executor session. Split anything bigger.
+
+## Style
+
+- Task state lives ONLY in `kanvas.json`, and it changes only through the `kanvas` CLI: never edit that file by hand. Do not create parallel board files or feature documents for a card.
+- The board and the agent files (`AGENTS.md`, `kanvas.json`, `.agents/`, `.claude/`) belong to the human and stay out of the repository, ignored by the project's `.gitignore`; a card that touches only them produces no commit.
+- One commit per card for the project files it changes. Commit locally, but NEVER push. The human reviews the commit and pushes.
+- Modify project files with the edit/write tools, not with shell commands like sed, echo or redirects, so the human can review the changes in Gentle Changes.
+- Ask the human only for real scope decisions; otherwise keep going.

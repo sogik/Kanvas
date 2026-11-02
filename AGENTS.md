@@ -1,206 +1,69 @@
-# Canvas Workflow — Agent Instructions
+# Working on Kanvas
 
-This project uses Obsidian Canvas files as visual task boards. A Python CLI tool manages all board modifications.
+Kanvas is a task board shared by humans and AI agents. This file is for agents and contributors changing Kanvas itself. The instructions Kanvas gives to agents in other projects live in `skill/SKILL.md`.
 
-## CRITICAL RULE
+## Layout
 
-**NEVER edit `.canvas` files directly.** All canvas modifications MUST go through the CLI tool:
+| Path | What it is |
+|------|------------|
+| `kanvas.py` | CLI, board model, local server, `init` / `import` / `export`. Python 3.8+, standard library only |
+| `kanvas.html` | The whole browser board in one file: CSS, markup and JavaScript, no build step |
+| `skill/SKILL.md` | Agent skill that `init` installs into projects |
+| `examples/sample.json` | Demo board, also used by the tests |
+| `examples/drone.json` | The board in the README, its screenshots and the skill's examples |
+| `tests/test_kanvas.py` | Test suite (`unittest`) |
+| `tests/layout_stats.py`, `tests/fixtures/` | Graph clutter measurements and the boards they run on |
+| `pyproject.toml` | The `kanvas-board` package, which installs the `kanvas` command. Its version comes from `VERSION` in `kanvas.py`, and the `VERSION` file must match. hatchling and hatch-fancy-pypi-readme, which points the README's relative links at GitHub for PyPI, are needed only to build it |
+| `tests/check_installed.py` | Runs an installed `kanvas` command through `init`, subfolders, `export`, `serve` (with a second project joining it) and the project copy |
 
-```bash
-python canvas-tool.py "<file>.canvas" <command> [args]
-```
+## Rules
 
-Direct JSON editing of `.canvas` files is **forbidden**. The CLI tool enforces workflow rules (valid transitions, cycle detection, blocked states) so you don't have to remember them.
+- **Zero dependencies.** `kanvas.py` uses only the standard library and must run on Python 3.8 on Linux, macOS and Windows. `kanvas.html` loads nothing from the network.
+- **One format, two writers.** `kanvas.py` (`canonical`, `dumps`) and `kanvas.html` (`canonical`, `serialize`) must produce byte-identical files. Change both together; `test_html_serializer_matches_python` checks it.
+- **The CLI enforces the agent workflow.** Agents can propose, start, finish (with a summary), pause, note and add dependencies, and they can edit, withdraw and rewire proposals until a human approves them. Approving, changing approved tasks and marking done stay human-only, in the browser. Turning YOLO on approves the chain's proposals; a proposal an agent links into the chain later stays a proposal.
+- **Writes are safe.** Every CLI write goes through `mutate()`: lock, load, change, atomic replace. Failed commands leave the file untouched. Browser saves are compare-and-swap through the server (`If-Match`, 409 with the current board, the change is replayed).
+- **Never edit a user's existing files.** `init` only creates files that do not exist yet, apart from the skill copies it owns.
 
-## Session Protocol
-
-### 1. Start of session — read the board
-
-```bash
-python canvas-tool.py "Project.canvas" status
-```
-
-Review the board state. Run `normalize` if needed. Report ready tasks, blocked tasks, and any anomalies to the user.
-
-### 2. Pick a task
-
-```bash
-python canvas-tool.py "Project.canvas" ready            # see what's available
-python canvas-tool.py "Project.canvas" show <TASK-ID>    # read task details
-python canvas-tool.py "Project.canvas" start <TASK-ID>   # begin work (red → orange)
-```
-
-If multiple tasks are ready, ask the user which to prioritize.
-
-### 3. Work on the task
-
-Execute the task. If you discover subtasks, propose them:
+## Testing
 
 ```bash
-python canvas-tool.py "Project.canvas" propose Development "Subtask title" "Description" --depends-on DV-01
+python -m unittest discover -s tests -v
 ```
 
-Update notes on your in-progress task:
+`tests/test_browser.py` runs `kanvas.html` in headless Chrome against `kanvas.py serve` and checks loading, the task panel, saving notes, failed saves and live updates from the CLI. It skips where it finds no Chrome or Chromium; `KANVAS_TEST_CHROME` names the browser to use, and the Linux CI jobs set it so the test runs there.
+
+When changing `pyproject.toml`, or how `kanvas.py` finds `kanvas.html` and `SKILL.md`, build and install the package and check the installed command, as CI does on Linux, macOS and Windows:
 
 ```bash
-python canvas-tool.py "Project.canvas" edit <TASK-ID> "Updated description with findings."
+uv build && uv tool install --force dist/*.whl
+python tests/check_installed.py
 ```
 
-### 4. Finish the task
+The graph layout lives in the "Graph layout" section of `kanvas.html`, which must stay free of DOM and app state so it runs under Node. When changing it, compare the clutter before and after:
 
 ```bash
-python canvas-tool.py "Project.canvas" finish <TASK-ID>   # orange → cyan
+python tests/layout_stats.py -v          # crossings, arrows under cards, straight arrows and bends, per board and flow
+python tests/layout_stats.py --manual    # the same for the manual layout, where cards keep their file order
+python tests/layout_stats.py --unfolded  # the same with every lane's finished tasks shown, as when all their stubs are open
 ```
 
-Tell the user what was done. Do NOT attempt to set the card green — only the human does that.
+`LayoutTests` fails if crossings, arrows under cards or bends exceed its ceilings; lower them when the layout improves. In the browser console, `kanvasLayoutStats()` measures the board on screen.
 
-### 5. Repeat
-
-After the human marks your task green, check for newly unblocked tasks:
+For changes to `kanvas.html`, also check the page in a browser:
 
 ```bash
-python canvas-tool.py "Project.canvas" normalize
-python canvas-tool.py "Project.canvas" ready
+cp examples/sample.json /tmp/demo/kanvas.json
+cd /tmp/demo && python /path/to/kanvas.py serve
 ```
 
-## What you CAN do
+Then exercise both views, the task panel, and live updates by running CLI commands (`start`, `note`, `finish`) in another terminal while the page is open. Opening `kanvas.html` directly (file mode) and `kanvas.py export` (read-only snapshot) are separate code paths worth a look when touching storage or rendering.
 
-- **Read** the board: `status`, `show`, `list`, `blocked`, `blocking`, `ready`, `dump`
-- **Normalize** the board: `normalize`
-- **Propose** tasks: `propose` or `batch` (creates purple cards)
-- **Propose** groups: `propose-group` or `batch`
-- **Start** a task: `start <ID>` (red → orange)
-- **Finish** a task: `finish <ID>` (orange → cyan)
-- **Pause** a task: `pause <ID>` (orange → red)
-- **Edit** task text: `edit <ID> "<text>"` (only orange tasks)
-- **Add dependencies**: `add-dep <FROM> <TO>`
+## Releasing
 
-## What you CANNOT do
+Set the version in `kanvas.py` (`VERSION = "..."`) and in the `VERSION` file, then publish a GitHub release tagged `v` plus that version. `.github/workflows/release.yml` checks the tag, builds once, runs `tests/check_installed.py` on Linux, macOS and Windows, and uploads to PyPI through trusted publishing in the `pypi` environment. Test versions such as `0.4.0rc1` need a release marked as a pre-release, and final versions need one that is not; the workflow refuses a mismatch. Pull requests that change the workflow run it without the upload.
 
-- Edit `.canvas` files directly
-- Mark any card green (done) — human only
-- Work on purple cards (proposals awaiting approval)
-- Work on gray cards (blocked)
-- Work on cyan cards (awaiting human review)
-- Remove cards or edges
-- Change green cards
+## Cursor Cloud specific instructions
 
-## CLI Quick Reference
-
-### Read-only commands
-| Command | Description |
-|---------|-------------|
-| `status` | Board overview |
-| `show <ID>` | Task detail with dependencies |
-| `list [STATE\|GROUP]` | List tasks (filtered) |
-| `blocked` | Gray tasks and blockers |
-| `blocking` | Tasks that block others |
-| `ready` | Red tasks with deps met |
-| `dump` | Raw JSON |
-
-### Lifecycle commands
-| Command | Transition |
-|---------|-----------|
-| `start <ID>` | Red → Orange |
-| `finish <ID>` | Orange → Cyan |
-| `pause <ID>` | Orange → Red |
-
-### Proposal commands
-| Command | Description |
-|---------|-------------|
-| `propose <GROUP> "<TITLE>" "<DESC>" [--depends-on ID ...]` | Add task |
-| `propose-group "<LABEL>"` | Add group |
-| `batch` | Bulk-add from JSON on stdin |
-
-### Other commands
-| Command | Description |
-|---------|-------------|
-| `edit <ID> "<TEXT>"` | Update text (orange only) |
-| `add-dep <FROM> <TO>` | Add dependency |
-| `normalize` | Assign IDs, fix blocked states |
-
-## Color meanings
-
-| Color | Meaning |
-|-------|---------|
-| 🟣 Purple | Proposed by agent |
-| 🔴 Red | To Do (ready) |
-| 🟠 Orange | Doing |
-| 🔵 Cyan | Ready to review |
-| 🟢 Green | Done |
-| ⬜ Gray | Blocked |
-
-## Two-agent setup (overrides the sections above where they conflict)
-
-This project runs two roles. Everything above applies to the
-ORCHESTRATOR only.
-
-- Orchestrator: the only role that runs canvas-tool.py. Plans, delegates,
-  reviews, moves cards.
-- Executor (gentle-ai-worker): implements ONE card and reports back.
-  It must NEVER run canvas-tool.py, edit the .canvas file, or move cards.
-
-### Canvas-first rule (mandatory, applies before any other workflow)
-ALL work requests go through the canvas, no matter how small. This
-takes priority over any default workflow (ODD, plans, feature documents).
-1. On any request to build, change or fix something, FIRST propose the
-   work as cards with `batch` (purple), then STOP and wait for the
-   human to approve them. Do not edit project files before that.
-2. Small request = one single card.
-3. The human approving a card (purple to red) IS the authorization to
-   execute it. Do not ask for authorization again, and do not create
-   separate plans, task lists or feature documents.
-4. After approval, do NOT start until the human says to start.
-5. If the request names a branch, create it when starting the first card.
-6. Questions, explanations and reading the code do not need cards.
-
-### Picking a task
-- If several tasks are ready, pick them in dependency order. Only ask
-  the human which to prioritize if the choice is genuinely ambiguous.
-
-### Delegating
-1. Run `start <ID>` (orange), then delegate to the executor.
-2. Trivial edits (one file, a few lines, no exploration needed) may be
-   done directly by the orchestrator. Delegate everything else to
-   gentle-ai-worker.
-3. Give the executor only: goal, scope, and the "done when" command from
-   the card.
-4. The executor implements and returns a short summary of what changed.
-
-### Reviewing before cyan
-1. Run the card's "done when" command, then check that the result
-   matches the card's goal (not only that the command passes).
-2. If it fails or something is missing: delegate again with what is
-   missing. Do NOT run `finish`.
-3. If it passes: run `edit <ID>` to add a 2-3 line summary of what
-   changed, then `finish <ID>` (cyan).
-4. Never mark green. The human checks the diff and does that.
-
-### Handling Feedback on Cyan Cards (Refinement)
-If the card is in Cyan awaiting human review, and the human requests changes, fixes, or adjustments regarding that specific card:
-1. DO NOT propose a new card (no purple cards).
-2. Reopen the current task directly:
-   - Run start <TASK-ID> to move it back to Orzange.
-3. Update the description/notes of the SAME card with the human's feedback:
-   python canvas-tool.py "Project.canvas" edit <TASK-ID> "Added feedback: <adjustments requested>"
-4. Delegate the fixes to gentle-ai-worker using the same card context.
-5. Once fixed and verified, run finish <TASK-ID> again to return it to Cyan.
-6. ONLY propose a new card if the human asks for a completely new feature or requirement outside the original card's goal.
-
-### Writing cards
-Every proposed card must contain:
-- Goal: one sentence.
-- Scope: probable files or folders.
-- Done when: a command that proves it works (test, build, lint).
-One card = one executor session. Split anything bigger.
-
-### Style
-- Task state lives ONLY in the canvas. Do not create parallel task
-  lists or feature documents for a single card.
-- One commit per card, including the .canvas file.
-- Commit locally after each card, but NEVER push. The human reviews
-  the commit and pushes.
-- Modify project files with the edit/write tools, not with shell
-  commands like sed, echo or redirects, so the human can review the
-  changes in Gentle Changes.
-- Ask the human only for real scope decisions; otherwise keep going.
+- Python 3 and Node.js are preinstalled; no setup step is needed.
+- Run long-lived `kanvas.py serve` processes in tmux with `--no-open`, and use `--port` to keep test boards out of a Kanvas that is already running: `serve` opens its board in any Kanvas it finds on that port or the 19 after it.
+- Headless Chrome (`google-chrome --headless=new`) works for screenshots of `http://127.0.0.1:<port>/<folder>/`.
